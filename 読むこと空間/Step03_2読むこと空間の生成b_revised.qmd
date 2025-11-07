@@ -1,0 +1,379 @@
+---
+title: "step03_2 読むこと空間の生成"
+author: "藤本一男,平石貴士"
+date: now
+title-block-banner: true
+format: 
+  html:
+    embed-resources: true
+editor: visual
+toc: true
+number-sections: true
+---
+
+# 分析準備
+
+## package
+
+```{r}
+#| message: false
+#| warning: false
+library(haven)
+library(tidyverse)
+library(expss)
+library(explore)
+library(readxl)
+library(GDAtools)
+library(showtext)
+showtext_auto(TRUE)
+```
+
+# Data読み込み
+
+## Labeled SPSS を読み込む
+
+```{r}
+.d <- read_sav("../DataSetUp/data/現代日本の文化と不平等に関する社会学的研究_ローデータ.sav")
+```
+
+```{r}
+conv_tables　<- read_excel("../DataSetUp/data/Name_and_Label2.xlsx")
+```
+
+## Qnnと短縮変数名の対応表を読み込む
+
+```{r}
+conv_tables %>% select(短縮A) %>% unlist %>% setNames(NULL) -> short_vnames
+save(short_vnames,file = "short_vnames")
+```
+
+## SPSS savをfactor処理し短縮名をつける：.d.l
+
+-   factorにしたあとNAを"NA"に明示的に変換（これはSpecificMCAの処理で必要！）
+
+```{r}
+.d %>% labelled::to_factor() %>% #-> .d.l
+  　mutate_if(is.factor, ~ fct_explicit_na(., na_level = "NA")) %>% 
+#  fct_na_level_to_value(f, extra_levels = NULL)
+#  　mutate_if(is.factor, ~ fct_na_value_to_value(.,"NA")) %>% # これは使えない！
+  　mutate_if(is.factor,~ droplevels(.)) -> .d.l
+#save(.d.l,file = "../data/d.l.rda")
+```
+
+### 短縮変数名をつけたものを、.ddとする（MCA用）
+
+```{r}
+.dd <- .d.l
+colnames(.dd) <- short_vnames
+save(.dd,file = "dd.rda")
+```
+
+# Active 変数
+
+-   \[Q1C\]問１　この１年の趣味・娯楽活動　Ｃ．図書館での読書や資料収集(SA)　(5)
+
+-   \[Q6C\]問６　記事や本を読む頻度　Ｃ．紙の新聞 (70)
+
+-   \[Q6D\]問６　記事や本を読む頻度　Ｄ．紙の雑誌 (71)
+
+-   \[Q6E\]問６　記事や本を読む頻度　Ｅ．紙の本（マンガ含む）（72）　→**「５」と「99」を選んだ回答者を除外**
+
+-   \[Q6F\]問６　記事や本を読む頻度　Ｆ．電子書籍（マンガ含む）（73）
+
+-   \[Q7\]問７　好きな読書ジャンル(MA) (74:89)
+
+-   \[Q7\]問７　好きな読書ジャンル　**→「18」「19」「20」を選んだ回答者は除外　（17:19と解釈 90:92）→74:89**
+
+### Active 変数確認
+
+```{r}
+active <- c(5,70:73,74:89,90:92)
+length(active)
+.dd %>% select(all_of(active)) -> .dd_all
+.dd_all %>% names()
+```
+
+# 個体を選択する
+
+```{r}
+.d %>% rownames_to_column("rn") %>% count(Q6E)
+.d %>% rownames_to_column("rn") %>% filter(Q6E==5) %>% select(rn) %>% 
+  unlist %>% setNames(NULL) %>% as.numeric()-> NumQ6E
+
+.d %>% rownames_to_column("rn") %>% count(`Q7#17`)
+.d %>% rownames_to_column("rn") %>% filter(`Q7#17`==1) %>% select(rn)%>% 
+  unlist %>% setNames(NULL) %>% as.numeric() -> NumQ7_17
+.d %>% rownames_to_column("rn") %>% filter(`Q7#18`==1) %>% select(rn)%>% 
+  unlist %>% setNames(NULL) %>% as.numeric()-> NumQ7_18
+.d %>% rownames_to_column("rn") %>% filter(`Q7#19`==1) %>% select(rn)%>% 
+  unlist %>% setNames(NULL) %>% as.numeric()-> NumQ7_19
+
+union(NumQ6E , NumQ7_17) %>% union(NumQ7_18) %>% union(NumQ7_19) -> remove_ind
+length(remove_ind)
+```
+
+「Ｅ．紙の本（マンガ含む）（72）　→**「５」と「99」を選んだ回答者を除外」と**
+
+「\[Q7\]問７　好きな読書ジャンル　**→「18」「19」「20」を選んだ回答者は除外** 」の条件で、除外する個体数は、`r length(remove_ind)`となる。（542）
+
+```{r}
+.dd_all[-remove_ind,] -> .d_sel
+```
+
+# speMCAの実行
+
+## junckカテゴリの抽出：excl_listへ
+
+```{r}
+getindexcat(.d_sel) %>% str_detect("\\.NA") %>% which(TRUE) ->　excl_list
+excl_list
+length(excl_list)
+```
+
+## speMCA
+
+```{r}
+res.speMCA2 <- speMCA(.d_sel,excl=excl_list)
+save(res.speMCA2,file="res.speMCA2.rda") # specificMCAのresult
+save(.d_sel,file = "d_sel.rda") # MCA 対象df
+```
+
+## 修正寄与率の確認
+
+```{r}
+#| layout-ncol: 2
+#| column: page-right
+#| results: asis
+#| fig-showtext: true
+#| warning: false
+
+resmca <- res.speMCA2
+
+tibble(mrate=resmca$eig$mrate,cum.mrate=resmca$eig$cum.mrate) -> eig_tbl
+eig_tbl %>% knitr::kable(col.names = c("修正寄与率"," 累積集積寄与率"),row.names = TRUE,digits = 1)
+
+eig_tbl %>% #tibble(mrate=res.speMCA$eig$mrate,cum.mrate=res.speMCA$eig$cum.mrate) %>% 
+  ggplot(aes(x=1:nrow(eig_tbl),y=mrate)) + geom_col()
+```
+
+## 変数雲
+
+```{r}
+#| fig-width: 11
+#| fig-height: 11
+#| fig-showtext: true
+ggcloud_variables(resmca = resmca) + coord_fixed(ratio=1) -> pv12_2
+pv12_2
+ggcloud_variables(resmca = resmca,col="lightgray") + coord_fixed(ratio=1) -> pv12_2.gray
+pv12_2.gray
+
+
+ggcloud_variables(resmca = resmca,axes = c(3,2)) + coord_fixed(ratio=1) -> pv32_2
+pv32_2
+ggcloud_variables(resmca = resmca,axes = c(3,2),col="lightgray") + coord_fixed(ratio=1) -> pv32_2.gray
+pv32_2.gray
+
+```
+
+## 個体雲
+
+```{r}
+#| fig-showtext: true
+ggcloud_indiv(resmca)
+ggcloud_indiv(resmca,col = "grey") + coord_fixed(ratio=1) -> pi12_2.gray
+pi12_2.gray
+
+ggcloud_indiv(resmca,axes = c(3,2),col = "grey") + coord_fixed(ratio=1) -> pi32_2.gray
+pi32_2.gray
+```
+
+# 追加変数をPlot（平均点、集中楕円）
+
+```         
+【サプリメンタリ変数】 
+・Q2　問２　現在利用している有料のサービス　→全て (10:21)
+・Q5　A～T　全て (48:67)
+・Q8A　作家の好意度　→全て (94:106) 
+・Q10　A～R　全て (120:137)
+・Q13A　美術・視覚芸術作家の好意度　→全て (173:192)
+・Q15 　A～D　全て (205:208)
+・\[Q18\]問１８　社会階層(SA) (215) 
+・\[Q19\]問１９　社会階層を分けるもの(MA) (216:223) 
+・\[Q23\]問２３　最終学歴（中退、通学中含む）(SA) (236) 
+・\[Q25\]問２５　働き方について(SA)  (240)
+・\[Q26\]問２６　仕事の内容(SA)  (241)
+・\[Q28\]問２８　役職(SA)  (243)
+・\[Q39\]問３９　２０２２年の世帯所得(SA) (295) 
+・\[Q40\]問４０　所持している金融資産（預貯金や株式）額(SA) (296)
+```
+
+以上の追加変数に対して、ファイルを個別にたてて分析する。
+
+読むこと空間-追加変数Q2.qmd
+
+# 追加個体のオーバーレイ：うまくいってないので、ペンディング！
+
+読むこと空間の生成に「使わなかった」個体を、追加個体として、supindでオーバーレイしようとしたが、行列の列数があわず、エラーあとまわし！
+
+## 追加個体dfの取得
+
+```{r}
+#| fig-width: 11
+#| fig-height: 11
+#| fig-showtext: true
+#| eval: false
+#dfsup <- .dd_all[remove_ind,]
+dfsup <- .dd_all %>% slice(remove_ind) %>% mutate_if(is.factor,~ droplevels(.))
+dfsup.df <- dfsup %>% as.data.frame()
+ggadd_supind(p=pv12_2.gray,resmca = resmca,dfsup=dfsup,axes = c(1,2))
+
+supind(resmca, dfsup.df)
+```
+
+```{r}
+#| eval: false
+# supind
+resmca <-res.speMCA2
+supdata <- dfsup.df
+summary(dfsup.df)
+function (resmca, supdata) 
+{
+    supdata <- data.frame(supdata)
+    eigen <- resmca$eig$eigen
+    z <- as.matrix(dichotom(supdata, out = "numeric"))
+    dim(z)
+    z <- z[, -resmca$call$excl]
+    dim(z)
+    Q <- ncol(supdata)
+    delta <- 1/sqrt(eigen[1:resmca$call$ncp])
+    vcoord <- resmca$var$coord
+    dim(vcoord)
+    coord <- (1/Q) * z %*% vcoord # ここでエラー
+    coord <- sweep(coord, 2, delta, "*")
+    GM2 <- rowSums(coord^2)
+    cos2 <- sweep(coord^2, 1, GM2, "/")
+    cos2 <- round(cos2, 6)
+    rownames(coord) <- rownames(supdata)
+    rownames(cos2) <- rownames(supdata)
+    return(list(coord = coord, cos2 = cos2))
+}
+
+dim(res.speMCA2$var$coord)
+dim(z)
+dim(delta)
+dim(vcoord)
+```
+
+```{r}
+#| eval: false
+supind
+resmca <-mca
+supdata <- Music[c(1,20,300),1:5]
+function (resmca, supdata) 
+{
+    supdata <- data.frame(supdata)
+    type <- attr(resmca, "class")[1]
+    if (type %in% c("MCA", "stMCA", "multiMCA", "PCA")) 
+        eigen <- resmca$eig[, "eigenvalue"]
+    if (type %in% c("speMCA", "csMCA")) 
+        eigen <- resmca$eig$eigen
+    z <- as.matrix(dichotom(supdata, out = "numeric"))
+    if (type %in% c("speMCA", "csMCA")) 
+        z <- z[, -resmca$call$excl]
+    Q <- ncol(supdata)
+    delta <- 1/sqrt(eigen[1:resmca$call$ncp])
+    vcoord <- resmca$var$coord
+    coord <- (1/Q) * z %*% vcoord # ここでエラー
+    coord <- sweep(coord, 2, delta, "*")
+    GM2 <- rowSums(coord^2)
+    cos2 <- sweep(coord^2, 1, GM2, "/")
+    cos2 <- round(cos2, 6)
+    rownames(coord) <- rownames(supdata)
+    rownames(cos2) <- rownames(supdata)
+    return(list(coord = coord, cos2 = cos2))
+}
+
+dim(res.speMCA2$var$coord)
+dim(z)
+dim(vcoord)
+```
+
+```{r}
+#| eval: false
+# specific MCA of Music example data set
+data(Music) # 500 x 9
+rownames(Music) <- paste0("i", 1:nrow(Music))
+junk <- c("FrenchPop.NA", "Rap.NA", "Rock.NA", "Jazz.NA", "Classical.NA")
+mca <- speMCA(Music[1:300,1:5], excl = junk)
+# adds individuals 1, 20 and 300 as supplementary individuals
+# onto the cloud of individuals
+p <- ggcloud_indiv(mca, col = "lightgrey")
+ggadd_supind(p, mca, Music[c(301:500), 1:5])
+```
+
+## インタビュー対象者のプロット（平石加筆）20251106
+
+```{r}
+library(ggrepel)
+
+#1軸と2軸を指定
+
+xdim <- 1
+ydim <- 2
+
+#個体を選択
+.dd[-remove_ind,] -> .dd_sel
+
+#インタビュー対象者から個体を選択（run_IDで操作していることに注意）
+interview <- read_excel("../DataSetUp/data/インタビュー協力者run.xlsx")
+remove_ids <- .dd$run[remove_ind]  
+interview_sel <- interview %>% filter(!(run %in% remove_ids))
+
+#インタビュー対象者の座標位置のデータフレームを作成
+df_sel <- cbind(.dd_sel[,1], resmca$ind$coord) %>% rename(run = 1)
+df_int <- left_join(interview_sel, df_sel)
+label <- df_int$run
+
+#プロット
+xcol <- paste0("dim.", xdim)
+ycol <- paste0("dim.", ydim)
+
+pi12_2.gray +
+  geom_point(data = df_int, aes(x = .data[[xcol]], y = .data[[ycol]])) +
+  geom_text_repel(data = df_int, aes(x = .data[[xcol]], y = .data[[ycol]], label = run),          
+                  # ラベルが重ならないように調整
+                   #fill = "lightblue",            # ラベルの背景色
+                   #box.padding = 0.5,             # ラベル間のスペース
+                   #point.padding = 0.5
+)  -> pi12_3.gray
+
+pi12_3.gray
+
+#3軸と2軸を指定
+xdim <- 3
+ydim <- 2
+
+#プロット
+xcol <- paste0("dim.", xdim)
+ycol <- paste0("dim.", ydim)
+
+pi32_2.gray +
+  geom_point(data = df_int, aes(x = .data[[xcol]], y = .data[[ycol]])) +
+  geom_text_repel(data = df_int, aes(x = .data[[xcol]], y = .data[[ycol]], label = run),          
+                  # ラベルが重ならないように調整
+                   #fill = "lightblue",            # ラベルの背景色
+                   #box.padding = 0.5,             # ラベル間のスペース
+                   #point.padding = 0.5
+)  -> pi32_3.gray
+
+pi32_3.gray
+
+```
+
+```{r}
+#| eval: false
+save(pv12_2,file = "pv12_2.rda")
+save(pv12_2.gray,file = "pv12_2gray.rda")
+save(pi12_3.gray,file = "pi12_3.gray.rda")
+save(pi32_3.gray,file = "pi32_3.gray.rda")
+```
